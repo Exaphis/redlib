@@ -185,11 +185,12 @@ pub struct Media {
 impl Media {
 	pub async fn parse(data: &Value) -> (String, Self, Vec<GalleryMedia>) {
 		let mut gallery = Vec::new();
+		let crosspost_parent = &data["crosspost_parent_list"][0];
 
 		// Define the various known places that Reddit might put video URLs.
 		let data_preview = &data["preview"]["reddit_video_preview"];
 		let secure_media = &data["secure_media"]["reddit_video"];
-		let crosspost_parent_media = &data["crosspost_parent_list"][0]["secure_media"]["reddit_video"];
+		let crosspost_parent_media = &crosspost_parent["secure_media"]["reddit_video"];
 
 		// If post is a video, return the video
 		let (post_type, url_val, alt_url_val) = if data_preview["fallback_url"].is_string() {
@@ -226,22 +227,36 @@ impl Media {
 					("image", &preview["source"]["url"], None)
 				}
 			}
+		} else if crosspost_parent["post_hint"].as_str().unwrap_or("") == "image" {
+			// Crossposts keep their media metadata on the parent post.
+			let preview = &crosspost_parent["preview"]["images"][0];
+			let mp4 = &preview["variants"]["mp4"];
+
+			if mp4.is_object() {
+				("gif", &mp4["source"]["url"], None)
+			} else if crosspost_parent["domain"] == "i.redd.it" {
+				("image", &crosspost_parent["url"], None)
+			} else {
+				("image", &preview["source"]["url"], None)
+			}
 		} else if data["is_self"].as_bool().unwrap_or_default() {
 			// If type is self, return permalink
+			("self", &data["permalink"], None)
+		} else if crosspost_parent["is_self"].as_bool().unwrap_or_default() {
+			// Text crossposts keep their body on the parent post.
 			("self", &data["permalink"], None)
 		} else if data["is_gallery"].as_bool().unwrap_or_default() {
 			// If this post contains a gallery of images
 			gallery = GalleryMedia::parse(&data["gallery_data"]["items"], &data["media_metadata"]);
 
 			("gallery", &data["url"], None)
-		} else if data["crosspost_parent_list"][0]["is_gallery"].as_bool().unwrap_or_default() {
+		} else if crosspost_parent["is_gallery"].as_bool().unwrap_or_default() {
 			// If this post contains a gallery of images
-			gallery = GalleryMedia::parse(
-				&data["crosspost_parent_list"][0]["gallery_data"]["items"],
-				&data["crosspost_parent_list"][0]["media_metadata"],
-			);
+			gallery = GalleryMedia::parse(&crosspost_parent["gallery_data"]["items"], &crosspost_parent["media_metadata"]);
 
 			("gallery", &data["url"], None)
+		} else if crosspost_parent["is_reddit_media_domain"].as_bool().unwrap_or_default() && crosspost_parent["domain"] == "i.redd.it" {
+			("image", &crosspost_parent["url"], None)
 		} else if data["is_reddit_media_domain"].as_bool().unwrap_or_default() && data["domain"] == "i.redd.it" {
 			// If this post contains a reddit media (image) URL.
 			("image", &data["url"], None)
@@ -250,7 +265,11 @@ impl Media {
 			("link", &data["url"], None)
 		};
 
-		let source = &data["preview"]["images"][0]["source"];
+		let source = if data["preview"]["images"][0]["source"].is_object() {
+			&data["preview"]["images"][0]["source"]
+		} else {
+			&crosspost_parent["preview"]["images"][0]["source"]
+		};
 
 		let alt_url = alt_url_val.map_or(String::new(), |val| format_url(val.as_str().unwrap_or_default()));
 
@@ -388,6 +407,25 @@ impl Post {
 			if body.is_empty() {
 				body = rewrite_urls(&val(post, "body_html"));
 			}
+			if body.is_empty() {
+				body = rewrite_urls(data["crosspost_parent_list"][0]["selftext_html"].as_str().unwrap_or_default());
+			}
+
+			let thumbnail_url = format_url(data["thumbnail"].as_str().unwrap_or_default());
+			let (thumbnail_url, thumbnail_width, thumbnail_height) = if thumbnail_url.is_empty() {
+				let crosspost_parent = &data["crosspost_parent_list"][0];
+				(
+					format_url(crosspost_parent["thumbnail"].as_str().unwrap_or_default()),
+					crosspost_parent["thumbnail_width"].as_i64().unwrap_or_default(),
+					crosspost_parent["thumbnail_height"].as_i64().unwrap_or_default(),
+				)
+			} else {
+				(
+					thumbnail_url,
+					data["thumbnail_width"].as_i64().unwrap_or_default(),
+					data["thumbnail_height"].as_i64().unwrap_or_default(),
+				)
+			};
 
 			posts.push(Self {
 				id: val(post, "id"),
@@ -416,10 +454,10 @@ impl Post {
 				upvote_ratio: ratio as i64,
 				post_type,
 				thumbnail: Media {
-					url: format_url(val(post, "thumbnail").as_str()),
+					url: thumbnail_url,
 					alt_url: String::new(),
-					width: data["thumbnail_width"].as_i64().unwrap_or_default(),
-					height: data["thumbnail_height"].as_i64().unwrap_or_default(),
+					width: thumbnail_width,
+					height: thumbnail_height,
 					poster: String::new(),
 					download_name: String::new(),
 				},
@@ -706,7 +744,7 @@ impl Preferences {
 			available_themes: themes,
 			theme: setting(req, "theme"),
 			front_page: setting(req, "front_page"),
-			layout: setting(req, "layout"),
+			layout: setting_or_default(req, "layout", "classic".to_string()),
 			wide: setting(req, "wide"),
 			blur_spoiler: setting(req, "blur_spoiler"),
 			show_nsfw: setting(req, "show_nsfw"),
@@ -1005,6 +1043,7 @@ static REGEX_URL_OLD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://o
 static REGEX_URL_NP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://np\.reddit\.com/(.*)").unwrap());
 static REGEX_URL_PLAIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://reddit\.com/(.*)").unwrap());
 static REGEX_URL_VIDEOS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://v\.redd\.it/(.*)/DASH_([0-9]{2,4}(\.mp4|$|\?source=fallback))").unwrap());
+static REGEX_URL_VIDEOS_CMAF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://v\.redd\.it/([^/]+)/CMAF_([0-9]{2,4}\.mp4)(?:\?.*)?$").unwrap());
 static REGEX_URL_VIDEOS_HLS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://v\.redd\.it/(.+)/(HLSPlaylist\.m3u8.*)$").unwrap());
 static REGEX_URL_IMAGES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://i\.redd\.it/(.*)").unwrap());
 static REGEX_URL_THUMBS_A: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://a\.thumbs\.redditmedia\.com/(.*)").unwrap());
@@ -1017,7 +1056,7 @@ static REGEX_URL_STATIC_MEDIA: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"h
 
 /// Direct urls to proxy if proxy is enabled
 pub fn format_url(url: &str) -> String {
-	if url.is_empty() || url == "self" || url == "default" || url == "nsfw" || url == "spoiler" {
+	if url.is_empty() || url == "self" || url == "default" || url == "image" || url == "nsfw" || url == "spoiler" {
 		String::new()
 	} else {
 		Url::parse(url).map_or(url.to_string(), |parsed| {
@@ -1031,33 +1070,24 @@ pub fn format_url(url: &str) -> String {
 				})
 			};
 
-			macro_rules! chain {
-				() => {
-					{
-						String::new()
-					}
-				};
-
-				( $first_fn:expr, $($other_fns:expr), *) => {
-					{
-						let result = $first_fn;
-						if result.is_empty() {
-							chain!($($other_fns,)*)
-						}
-						else
-						{
-							result
-						}
-					}
-				};
-			}
-
 			match domain {
 				"www.reddit.com" => capture(&REGEX_URL_WWW, "/", 1),
 				"old.reddit.com" => capture(&REGEX_URL_OLD, "/", 1),
 				"np.reddit.com" => capture(&REGEX_URL_NP, "/", 1),
 				"reddit.com" => capture(&REGEX_URL_PLAIN, "/", 1),
-				"v.redd.it" => chain!(capture(&REGEX_URL_VIDEOS, "/vid/", 2), capture(&REGEX_URL_VIDEOS_HLS, "/hls/", 2)),
+				"v.redd.it" => {
+					let dash = capture(&REGEX_URL_VIDEOS, "/vid/", 2);
+					if !dash.is_empty() {
+						dash
+					} else {
+						let cmaf = capture(&REGEX_URL_VIDEOS_CMAF, "/cmaf/", 2);
+						if !cmaf.is_empty() {
+							cmaf
+						} else {
+							capture(&REGEX_URL_VIDEOS_HLS, "/hls/", 2)
+						}
+					}
+				}
 				"i.redd.it" => capture(&REGEX_URL_IMAGES, "/img/", 1),
 				"a.thumbs.redditmedia.com" => capture(&REGEX_URL_THUMBS_A, "/thumb/a/", 1),
 				"b.thumbs.redditmedia.com" => capture(&REGEX_URL_THUMBS_B, "/thumb/b/", 1),
@@ -1451,7 +1481,7 @@ pub fn to_absolute_url(relative_path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-	use super::{deflate_compress, deflate_decompress, format_num, format_url, render_bullet_lists, rewrite_emotes, rewrite_urls, url_path_basename, Post, Preferences};
+	use super::{deflate_compress, deflate_decompress, format_num, format_url, render_bullet_lists, rewrite_emotes, rewrite_urls, url_path_basename, Media, Post, Preferences};
 
 	#[test]
 	fn format_num_works() {
@@ -1502,6 +1532,8 @@ mod tests {
 			"/preview/pre/qwerty.jpg?auto=webp&s=asdf"
 		);
 		assert_eq!(format_url("https://v.redd.it/foo/DASH_360.mp4?source=fallback"), "/vid/foo/360.mp4");
+		assert_eq!(format_url("https://v.redd.it/foo/CMAF_1080.mp4"), "/cmaf/foo/1080.mp4");
+		assert_eq!(format_url("https://v.redd.it/foo/CMAF_96.mp4?source=fallback"), "/cmaf/foo/96.mp4");
 		assert_eq!(
 			format_url("https://v.redd.it/foo/HLSPlaylist.m3u8?a=bar&v=1&f=sd"),
 			"/hls/foo/HLSPlaylist.m3u8?a=bar&v=1&f=sd"
@@ -1515,9 +1547,52 @@ mod tests {
 		assert_eq!(format_url(""), "");
 		assert_eq!(format_url("self"), "");
 		assert_eq!(format_url("default"), "");
+		assert_eq!(format_url("image"), "");
 		assert_eq!(format_url("nsfw"), "");
 		assert_eq!(format_url("spoiler"), "");
 	}
+
+	#[tokio::test]
+	async fn crosspost_image_uses_parent_media() {
+		let data = serde_json::json!({
+			"permalink": "/r/example/comments/crosspost/",
+			"crosspost_parent_list": [{
+				"post_hint": "image",
+				"domain": "i.redd.it",
+				"url": "https://i.redd.it/crosspost.jpg",
+				"preview": {
+					"images": [{
+						"source": {
+							"url": "https://preview.redd.it/crosspost.jpg",
+							"width": 640,
+							"height": 480
+						},
+						"variants": {}
+					}]
+				}
+			}]
+		});
+
+		let (post_type, media, _) = Media::parse(&data).await;
+		assert_eq!(post_type, "image");
+		assert_eq!(media.url, "/img/crosspost.jpg");
+		assert_eq!(media.width, 640);
+		assert_eq!(media.height, 480);
+	}
+
+	#[tokio::test]
+	async fn crosspost_text_uses_parent_type() {
+		let data = serde_json::json!({
+			"permalink": "/r/example/comments/text_crosspost/",
+			"crosspost_parent_list": [{
+				"is_self": true
+			}]
+		});
+
+		let (post_type, _, _) = Media::parse(&data).await;
+		assert_eq!(post_type, "self");
+	}
+
 	#[test]
 	fn serialize_prefs() {
 		let prefs = Preferences {

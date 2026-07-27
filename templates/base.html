@@ -26,7 +26,15 @@
 		<!-- PWA Manifest -->
 		<link rel="manifest" type="application/json" href="/manifest.json">
 		<link rel="shortcut icon" type="image/x-icon" href="/favicon.ico"> 
-		<link rel="stylesheet" type="text/css" href="/style.css?v={{ env!("CARGO_PKG_VERSION") }}">
+		<link rel="stylesheet" type="text/css" href="/style.css?v={{ env!("CARGO_PKG_VERSION") }}-res24">
+		{% if prefs.layout == "classic" %}
+		{% if prefs.use_hls == "on" %}
+		<script src="/hls.min.js" defer></script>
+		<script src="/playHLSVideo.js?v={{ env!("CARGO_PKG_VERSION") }}-res26" defer></script>
+		{% endif %}
+		<script src="/res-hosts.js?v={{ env!("CARGO_PKG_VERSION") }}-res23" defer></script>
+		<script src="/res-classic.js?v={{ env!("CARGO_PKG_VERSION") }}-res23" defer></script>
+		{% endif %}
 		<!-- Video quality -->
 		<div id="video_quality" data-value="{{ prefs.video_quality }}"></div>
 		{% endblock %}
@@ -34,7 +42,7 @@
 	<body class="
 		{% if prefs.layout != "" %}{{ prefs.layout }}{% endif %}
 		{% if prefs.wide == "on" %} wide{% endif %}
-		{% if prefs.theme != "system" %} {{ prefs.theme }}{% endif %}
+		{% if prefs.theme != "" && prefs.theme != "system" %} {{ prefs.theme }}{% else %} system{% endif %}
 		{% if prefs.fixed_navbar == "on" %} fixed_navbar{% endif %}">
 		<!-- NAVIGATION BAR -->
 		<nav class="

@@ -209,7 +209,7 @@ async fn main() {
 		"Referrer-Policy" => "no-referrer",
 		"X-Content-Type-Options" => "nosniff",
 		"X-Frame-Options" => "DENY",
-		"Content-Security-Policy" => "default-src 'none'; font-src 'self'; script-src 'self' blob:; manifest-src 'self'; media-src 'self' data: blob: about:; style-src 'self' 'unsafe-inline'; base-uri 'none'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; connect-src 'self'; worker-src blob:;"
+		"Content-Security-Policy" => "default-src 'none'; font-src 'self'; script-src 'self' blob:; manifest-src 'self'; media-src 'self' data: blob: about: https:; style-src 'self' 'unsafe-inline'; base-uri 'none'; img-src 'self' data: https:; frame-src https:; form-action 'self'; frame-ancestors 'none'; connect-src 'self' https://public.api.bsky.app; worker-src blob:;"
 	};
 
 	if let Some(expire_time) = hsts {
@@ -257,12 +257,22 @@ async fn main() {
 		.at("/check_update.js")
 		.get(|_| resource(include_str!("../static/check_update.js"), "text/javascript", false).boxed());
 	app.at("/copy.js").get(|_| resource(include_str!("../static/copy.js"), "text/javascript", false).boxed());
+	app
+		.at("/res-hosts.js")
+		.get(|_| resource(include_str!("../static/res-hosts.js"), "text/javascript", true).boxed());
+	app
+		.at("/res-classic.js")
+		.get(|_| resource(include_str!("../static/res-classic.js"), "text/javascript", true).boxed());
+	app
+		.at("/res-oembed/flickr")
+		.get(|r| async move { proxy(r, "https://www.flickr.com/services/oembed/").await }.boxed());
 
 	app.at("/commits.atom").get(|_| async move { proxy_commit_info().await }.boxed());
 	app.at("/instances.json").get(|_| async move { proxy_instances().await }.boxed());
 
 	// Proxy media through Redlib
 	app.at("/vid/:id/:size").get(|r| proxy(r, "https://v.redd.it/{id}/DASH_{size}").boxed());
+	app.at("/cmaf/:id/:size").get(|r| proxy(r, "https://v.redd.it/{id}/CMAF_{size}").boxed());
 	app.at("/hls/:id/*path").get(|r| proxy(r, "https://v.redd.it/{id}/{path}").boxed());
 	app.at("/img/*path").get(|r| proxy(r, "https://i.redd.it/{path}").boxed());
 	app.at("/thumb/:point/:id").get(|r| proxy(r, "https://{point}.thumbs.redditmedia.com/{id}").boxed());

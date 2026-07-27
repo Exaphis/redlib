@@ -14,6 +14,30 @@
 	{% endfor %}
 {%- endmacro %}
 
+{% macro classic_timeframe(listing_kind, selected) -%}
+<div id="timeframe_options">
+	<span>{{ listing_kind }} links from:</span>
+	<details class="classic_timeframe_menu">
+		<summary title="Change time period">
+			{% if selected == "hour" %}past hour
+			{% else if selected == "week" %}past week
+			{% else if selected == "month" %}past month
+			{% else if selected == "year" %}past year
+			{% else if selected == "all" %}all time
+			{% else %}past 24 hours{% endif %}
+		</summary>
+		<div>
+			<a href="?t=hour"{% if selected == "hour" %} class="selected"{% endif %}>past hour</a>
+			<a href="?t=day"{% if selected.is_empty() || selected == "day" %} class="selected"{% endif %}>past 24 hours</a>
+			<a href="?t=week"{% if selected == "week" %} class="selected"{% endif %}>past week</a>
+			<a href="?t=month"{% if selected == "month" %} class="selected"{% endif %}>past month</a>
+			<a href="?t=year"{% if selected == "year" %} class="selected"{% endif %}>past year</a>
+			<a href="?t=all"{% if selected == "all" %} class="selected"{% endif %}>all time</a>
+		</div>
+	</details>
+</div>
+{%- endmacro %}
+
 {% macro search(root, search) -%}
 <form action="{% if root != "/r/" && !root.is_empty() %}{{ root }}{% endif %}/search" id="searchbox">
 	<input id="search" type="text" name="q" placeholder="Search" title="Search redlib" value="{{ search }}">
@@ -61,6 +85,54 @@
 {% if post.post_type == "video" && !post.media.alt_url.is_empty() && prefs.hide_hls_notification != "on" %}
 <div class="post_notification"><p><a href="/settings/update/?use_hls=on&redirect={{ redirect_url }}">Enable HLS</a> to view with audio, or <a href="/settings/update/?hide_hls_notification=on&redirect={{ redirect_url }}">disable this notification</a></p></div>
 {% endif %}
+{%- endmacro %}
+
+{% macro res_expando(post) -%}
+<details class="res-expando{% if post.post_type == "self" %} res-expando-self{% else %} res-expando-media{% endif %}">
+	<summary title="{% if post.post_type == "self" %}Expand text{% else %}Expand media{% endif %}" aria-label="{% if post.post_type == "self" %}Expand text{% else %}Expand media{% endif %}">
+		<span class="res-expando-collapsed">{% if post.post_type == "self" %}≡{% else %}+{% endif %}</span>
+		<span class="res-expando-open">−</span>
+	</summary>
+	<div class="res-expando-content{% if post.post_type == "image" || post.post_type == "video" || post.post_type == "gif" %} res-expando-single{% endif %}{% if post.post_type == "video" || post.post_type == "gif" %} res-expando-video{% else if post.post_type == "self" %} res-expando-text{% endif %}">
+		{% if post.post_type == "self" %}
+		<div class="post_body">
+			{{ post.body|safe }}
+		</div>
+			{% else if post.post_type == "image" %}
+			<a href="{{ post.media.url }}" rel="nofollow">
+				<img alt="Post image" data-src="{{ post.media.url }}">
+			</a>
+			{% else if post.post_type == "video" || post.post_type == "gif" %}
+			{% if prefs.use_hls == "on" && !post.media.alt_url.is_empty() %}
+			<video data-poster="{{ post.media.poster }}" preload="metadata" controls muted playsinline {% if post.post_type == "gif" %}loop{% endif %}>
+				<source src="{{ post.media.alt_url }}" type="application/vnd.apple.mpegurl">
+				<source src="{{ post.media.url }}" type="video/mp4">
+				<a href="{{ post.media.url }}">Open video</a>
+			</video>
+			{% else %}
+			<video data-src="{{ post.media.url }}" data-poster="{{ post.media.poster }}" preload="metadata" controls muted playsinline {% if post.post_type == "gif" %}loop{% endif %}>
+				<a href="{{ post.media.url }}">Open video</a>
+			</video>
+			{% endif %}
+			{% else if post.post_type == "gallery" %}
+			<div class="res-expando-gallery">
+			{% for image in post.gallery %}
+			<figure>
+				<a href="{{ image.url }}" rel="nofollow">
+					<img alt="Gallery image" data-src="{{ image.url }}">
+				</a>
+				{% if !image.caption.is_empty() %}
+				<figcaption>{{ image.caption }}</figcaption>
+				{% endif %}
+			</figure>
+			{% endfor %}
+		</div>
+		{% endif %}
+		{% if post.post_type != "self" %}
+		<span class="res-resize-handle" aria-hidden="true"></span>
+		{% endif %}
+	</div>
+</details>
 {%- endmacro %}
 
 {% macro post(post) -%}
@@ -122,14 +194,18 @@
 	</div>
 	{% else if post.post_type == "video" || post.post_type == "gif" %}
 	{% if prefs.use_hls == "on" && !post.media.alt_url.is_empty() %}
+	{% if prefs.layout != "classic" %}
 	<script src="/hls.min.js"></script>
+	{% endif %}
 	<div class="post_media_content">
-		<video class="post_media_video short {% if prefs.autoplay_videos == "on" %}hls_autoplay{% endif %}" {% if post.media.width > 0 && post.media.height > 0 %}width="{{ post.media.width }}" height="{{ post.media.height }}"{% endif %} poster="{{ post.media.poster }}" preload="none" controls>
+        <video class="post_media_video short {% if prefs.autoplay_videos == "on" %}hls_autoplay{% endif %}" {% if post.media.width > 0 && post.media.height > 0 %}width="{{ post.media.width }}" height="{{ post.media.height }}"{% endif %} poster="{{ post.media.poster }}" preload="none" controls>
 			<source src="{{ post.media.alt_url }}" type="application/vnd.apple.mpegurl" />
 			<source src="{{ post.media.url }}" type="video/mp4" />
 		</video>
 	</div>
+	{% if prefs.layout != "classic" %}
 	<script src="/playHLSVideo.js"></script>
+	{% endif %}
 	{% else %}
 	<div class="post_media_content">
 		<video class="post_media_video" src="{{ post.media.url }}" controls {% if prefs.autoplay_videos == "on" %}autoplay{% endif %} loop><a href={{ post.media.url }}>Video</a></video>
@@ -217,9 +293,38 @@
 </li>
 {% endmacro %}
 
+{% macro classic_thumbnail(post) -%}
+<a class="post_thumbnail classic_thumbnail" href="{{ post.permalink }}">
+	{% if !post.thumbnail.url.is_empty() %}
+	<img loading="lazy" alt="" src="{{ post.thumbnail.url }}">
+	{% else if !post.media.poster.is_empty() %}
+	<img loading="lazy" alt="" src="{{ post.media.poster }}">
+	{% else if post.post_type == "image" %}
+	<img loading="lazy" alt="" src="{{ post.media.url }}">
+	{% endif %}
+</a>
+{%- endmacro %}
+
+{% macro res_host_expando(url) -%}
+<details class="res-expando res-expando-media res-host-expando" data-host-url="{{ url }}" hidden>
+	<summary title="Expand hosted media" aria-label="Expand hosted media">
+		<span class="res-expando-collapsed">+</span>
+		<span class="res-expando-open">−</span>
+	</summary>
+	<div class="res-expando-content res-expando-host">
+		<div class="res-host-toolbar">
+			<span class="res-host-provider">hosted media</span>
+			<a href="{{ url }}" target="_blank" rel="nofollow noreferrer">open original</a>
+		</div>
+		<div class="res-host-content"></div>
+		<span class="res-resize-handle" aria-hidden="true"></span>
+	</div>
+</details>
+{%- endmacro %}
+
 {% macro post_in_list(post) -%}
 {% set post_should_be_blurred = (post.flags.nsfw && prefs.blur_nsfw=="on") || (post.flags.spoiler && prefs.blur_spoiler=="on") -%}
-<div class="post{% if post.flags.stickied %} stickied{% endif %}{% if post_should_be_blurred %} post_blurred{% endif %}" id="{{ post.id }}">
+<div class="post{% if post.flags.stickied %} stickied{% endif %}{% if post_should_be_blurred %} post_blurred{% endif %}{% if prefs.layout == "classic" && (post.post_type == "image" || post.post_type == "video" || post.post_type == "gif" || post.post_type == "gallery" || (post.post_type == "self" && !post.body.is_empty())) %} has_expando{% endif %}{% if prefs.layout == "classic" && (!post.thumbnail.url.is_empty() || !post.media.poster.is_empty() || post.post_type == "image") %} has_thumbnail{% endif %}" id="{{ post.id }}">
 	<p class="post_header">
 		{% let community -%}
 		{% if post.community.starts_with("u_") -%}
@@ -250,7 +355,20 @@
 		<a href="{{ post.permalink }}">{{ post.title }}</a>{% if post.flags.nsfw %} <small class="nsfw">NSFW</small>{% endif %}{% if post.flags.spoiler %} <small class="spoiler">Spoiler</small>{% endif %}
 	</h2>
 	<!-- POST MEDIA/THUMBNAIL -->
-	{% if (prefs.layout.is_empty() || prefs.layout == "card") && post.post_type == "image" %}
+		{% if prefs.layout == "classic" && (post.post_type == "image" || post.post_type == "video" || post.post_type == "gif" || post.post_type == "gallery" || (post.post_type == "self" && !post.body.is_empty())) %}
+		{% call res_expando(post) %}
+		{% if post.post_type != "self" %}
+		{% call classic_thumbnail(post) %}
+		{% endif %}
+		{% if post.post_type == "video" && prefs.use_hls != "on" %}
+		{% call render_hls_notification(format!("{}%23{}", &self.url[1..].replace("&", "%26").replace("+", "%2B"), post.id)) %}
+		{% endif %}
+	{% else if prefs.layout == "classic" && post.post_type == "link" %}
+	{% call res_host_expando(post.media.url) %}
+	{% if !post.thumbnail.url.is_empty() %}
+		{% call classic_thumbnail(post) %}
+	{% endif %}
+	{% else if (prefs.layout.is_empty() || prefs.layout == "card") && post.post_type == "image" %}
 	<div class="post_media_content">
 		<a href="{{ post.media.url }}" class="post_media_image {% if post.media.height < post.media.width*2 %}short{% endif %}" >
 			{% if post.media.height == 0 || post.media.width == 0 %}
@@ -317,6 +435,17 @@
 	{% call poll(post) %}
 
 	<div class="post_footer">
+		{% if prefs.layout == "classic" && (post.post_type == "image" || post.post_type == "video" || post.post_type == "gif" || post.post_type == "gallery" || (post.post_type == "self" && !post.body.is_empty())) %}
+		<button type="button" class="res-expando-toggle{% if post.post_type == "self" %} res-expando-toggle-self{% endif %}" aria-expanded="false" title="{% if post.post_type == "self" %}Expand text{% else %}Expand media{% endif %}" aria-label="{% if post.post_type == "self" %}Expand text{% else %}Expand media{% endif %}">
+			<span class="res-expando-collapsed">{% if post.post_type == "self" %}≡{% else %}+{% endif %}</span>
+			<span class="res-expando-open">−</span>
+		</button>
+		{% else if prefs.layout == "classic" && post.post_type == "link" %}
+		<button type="button" class="res-expando-toggle res-host-expando-toggle" aria-expanded="false" title="Expand hosted media" aria-label="Expand hosted media" hidden>
+			<span class="res-expando-collapsed">+</span>
+			<span class="res-expando-open">−</span>
+		</button>
+		{% endif %}
 		<a href="{{ post.permalink }}" class="post_comments" title="{{ post.comments.1 }} {% if post.comments.1 == "1" %}comment{% else %}comments{% endif %}">{{ post.comments.0 }} {% if post.comments.1 == "1" %}comment{% else %}comments{% endif %}</a>
 	</div>
 </div>
