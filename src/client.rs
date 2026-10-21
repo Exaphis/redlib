@@ -10,6 +10,7 @@ use hyper::{body::Buf, header, Body, Request as HyperRequest, Response as HyperR
 use log::{error, info, trace, warn};
 use percent_encoding::{percent_encode, CONTROLS};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::result::Result;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicU16};
@@ -164,11 +165,17 @@ pub async fn proxy(req: HyperRequest<Body>, format: &str) -> Result<HyperRespons
 
 	// First parameter is target URL (mandatory).
 	let wreq_uri = wreq::Uri::try_from(url).map_err(|_| "Couldn't parse URL".to_string())?;
+	let is_hls_playlist = wreq_uri.path().ends_with(".m3u8");
 
 	let mut builder = CLIENT.get(wreq_uri);
 
 	// Copy useful headers from original request
 	for &key in &["Range", "If-Modified-Since", "Cache-Control"] {
+		// Playlists must be complete: Reddit can range the compressed response,
+		// whose Content-Range no longer describes the decompressed body.
+		if is_hls_playlist {
+			continue;
+		}
 		if let Some(value) = req.headers().get(key) {
 			builder = builder.header(key, value.as_bytes());
 		}
@@ -203,6 +210,9 @@ pub async fn proxy(req: HyperRequest<Body>, format: &str) -> Result<HyperRespons
 			rm("x-reddit-video-features");
 			rm("Nel");
 			rm("Report-To");
+			if is_hls_playlist {
+				headers.insert(wreq_header::CACHE_CONTROL, wreq_header::HeaderValue::from_static("no-store"));
+			}
 
 			res.into_hyper_response()
 		})
@@ -231,7 +241,12 @@ fn reddit_short_head(path: String, quarantine: bool, base_path: &'static str, ho
 /// in its response.
 fn request(method: &'static Method, path: String, redirect: bool, quarantine: bool, base_path: &'static str, host: &'static str) -> Boxed<Result<WreqResponse, String>> {
 	// Build Reddit URL from path.
-	let url = format!("{base_path}{path}");
+	let api_path = if base_path == REDDIT_URL_BASE {
+		reddit_api_path(&path)
+	} else {
+		Cow::Borrowed(path.as_str())
+	};
+	let url = format!("{base_path}{api_path}");
 
 	let mut headers: Vec<(String, String)> = vec![
 		("Host".into(), host.into()),
@@ -316,6 +331,26 @@ fn request(method: &'static Method, path: String, redirect: bool, quarantine: bo
 		}
 	}
 	.boxed()
+}
+
+/// Work around Reddit's literal-path block on anonymous thread requests (#591).
+/// Encode one separator in thread paths, preserving queries and all other routes.
+fn reddit_api_path(path: &str) -> Cow<'_, str> {
+	let pathname = path.split('?').next().unwrap_or(path);
+	let separator = if pathname.starts_with("/comments/") {
+		Some("/comments".len())
+	} else {
+		pathname
+			.strip_prefix("/r/")
+			.and_then(|rest| rest.split_once('/'))
+			.filter(|(sub, rest)| !sub.is_empty() && rest.starts_with("comments/"))
+			.map(|(sub, _)| "/r/".len() + sub.len())
+	};
+
+	match separator {
+		Some(index) => Cow::Owned(format!("{}%2F{}", &path[..index], &path[index + 1..])),
+		None => Cow::Borrowed(path),
+	}
 }
 
 /// Make a request to a Reddit API and parse the JSON response
@@ -510,6 +545,42 @@ mod tests {
 	use {crate::config::get_setting, sealed_test::prelude::*};
 
 	const POPULAR_URL: &str = "/r/popular/hot.json?&raw_json=1&geo_filter=GLOBAL";
+
+	#[test]
+	fn test_reddit_api_thread_paths() {
+		for (path, expected) in [
+			(
+				"/r/politics/comments/1x9xx9e/.json?&sort=confidence&raw_json=1",
+				"/r/politics%2Fcomments/1x9xx9e/.json?&sort=confidence&raw_json=1",
+			),
+			(
+				"/r/rust/comments/18t5968/title/kfbqlbc.json?context=3",
+				"/r/rust%2Fcomments/18t5968/title/kfbqlbc.json?context=3",
+			),
+			("/comments/1x9xx9e.json?raw_json=1", "/comments%2F1x9xx9e.json?raw_json=1"),
+			("/comments/18t5968/comments/kfbqlbc.json", "/comments%2F18t5968/comments/kfbqlbc.json"),
+		] {
+			assert_eq!(reddit_api_path(path), expected);
+			assert_eq!(reddit_api_path(expected), expected, "must not double encode");
+		}
+	}
+
+	#[test]
+	fn test_reddit_api_other_paths() {
+		for path in [
+			POPULAR_URL,
+			"/r/rust/about.json?raw_json=1",
+			"/r/comments/hot.json",
+			"/r/rust/comments.json",
+			"/r/rust/commentsXYZ/123.json",
+			"/user/spez/comments.json",
+			"/search.json?q=/r/rust/comments/123/&raw_json=1",
+			"/r/rust/hot.json?redirect=/comments/123",
+			"/r//comments/123.json",
+		] {
+			assert_eq!(reddit_api_path(path), path);
+		}
+	}
 
 	#[tokio::test(flavor = "multi_thread")]
 	async fn test_rate_limit_check() {

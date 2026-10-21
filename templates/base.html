@@ -30,10 +30,10 @@
 		{% if prefs.layout == "classic" %}
 		{% if prefs.use_hls == "on" %}
 		<script src="/hls.min.js" defer></script>
-		<script src="/playHLSVideo.js?v={{ env!("CARGO_PKG_VERSION") }}-res26" defer></script>
+		<script src="/playHLSVideo.js?v={{ env!("CARGO_PKG_VERSION") }}-res27" defer></script>
 		{% endif %}
 		<script src="/res-hosts.js?v={{ env!("CARGO_PKG_VERSION") }}-res23" defer></script>
-		<script src="/res-classic.js?v={{ env!("CARGO_PKG_VERSION") }}-res23" defer></script>
+		<script src="/res-classic.js?v={{ env!("CARGO_PKG_VERSION") }}-res27" defer></script>
 		{% endif %}
 		<!-- Video quality -->
 		<div id="video_quality" data-value="{{ prefs.video_quality }}"></div>

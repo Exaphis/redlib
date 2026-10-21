@@ -384,7 +384,8 @@
 					video.muted = true;
 					video.autoplay = true;
 					video.playsInline = true;
-					video.play().catch(() => {});
+					if (window.playHlsVideo) window.playHlsVideo(video);
+					else video.play().catch(() => {});
 				}
 			} else {
 				for (const video of details.querySelectorAll("video")) video.pause();
