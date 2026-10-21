@@ -750,7 +750,7 @@ impl Preferences {
 			show_nsfw: setting(req, "show_nsfw"),
 			hide_sidebar_and_summary: setting(req, "hide_sidebar_and_summary"),
 			blur_nsfw: setting(req, "blur_nsfw"),
-			use_hls: setting(req, "use_hls"),
+			use_hls: setting_or_default(req, "use_hls", "on".to_string()),
 			hide_hls_notification: setting(req, "hide_hls_notification"),
 			video_quality: setting(req, "video_quality"),
 			autoplay_videos: setting(req, "autoplay_videos"),

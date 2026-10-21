@@ -1,5 +1,6 @@
 // @license http://www.gnu.org/licenses/agpl-3.0.html AGPL-3.0
 (function () {
+    const pendingPlayers = new WeakMap();
     const configElement = document.getElementById('video_quality');
     const qualitySetting = configElement.getAttribute('data-value');
     function initializeHlsVideos(root) {
@@ -15,7 +16,7 @@
                 var autoplay = oldVideo.classList.contains("hls_autoplay");
 
                 // If HLS is supported natively then don't use hls.js
-                if (oldVideo.canPlayType(source.type) === "probably") {
+                if (oldVideo.canPlayType(source.type)) {
                     oldVideo.dataset.hlsInitialized = "true";
                     if (autoplay) {
                         oldVideo.play();
@@ -30,8 +31,6 @@
                     source.remove();
                 });
 
-                // Empty source to enable play event
-                newVideo.src = "about:blank";
                 newVideo.dataset.hlsInitialized = "true";
 
                 oldVideo.parentNode.replaceChild(newVideo, oldVideo);
@@ -50,6 +49,7 @@
                 }
 
                 function initializeHls() {
+                    pendingPlayers.delete(newVideo);
                     newVideo.removeEventListener('play', initializeHls);
                     newVideo.removeEventListener('click', initializeHls);
                     var hls = new Hls({ autoStartLoad: false });
@@ -146,10 +146,8 @@
                 }
 
                 newVideo.addEventListener('play', initializeHls);
-                // Chromium does not consistently emit a play event for the
-                // about:blank placeholder. A direct click on the native
-                // controls is a reliable signal that the user wants playback.
                 newVideo.addEventListener('click', initializeHls);
+                pendingPlayers.set(newVideo, initializeHls);
 
                 if (autoplay) {
                     initializeHls();
@@ -162,6 +160,16 @@
             });
         }
     }
+    // Expandos must start loading before play(): an unloaded media element
+    // can reject play() without emitting the event that initializes HLS.
+    window.playHlsVideo = function (video) {
+        const initialize = pendingPlayers.get(video);
+        if (initialize) {
+            initialize();
+        } else {
+            video.play().catch(() => {});
+        }
+    };
     window.initializeHlsVideos = initializeHlsVideos;
     initializeHlsVideos(document);
 })();

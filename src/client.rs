@@ -165,11 +165,17 @@ pub async fn proxy(req: HyperRequest<Body>, format: &str) -> Result<HyperRespons
 
 	// First parameter is target URL (mandatory).
 	let wreq_uri = wreq::Uri::try_from(url).map_err(|_| "Couldn't parse URL".to_string())?;
+	let is_hls_playlist = wreq_uri.path().ends_with(".m3u8");
 
 	let mut builder = CLIENT.get(wreq_uri);
 
 	// Copy useful headers from original request
 	for &key in &["Range", "If-Modified-Since", "Cache-Control"] {
+		// Playlists must be complete: Reddit can range the compressed response,
+		// whose Content-Range no longer describes the decompressed body.
+		if is_hls_playlist {
+			continue;
+		}
 		if let Some(value) = req.headers().get(key) {
 			builder = builder.header(key, value.as_bytes());
 		}
@@ -204,6 +210,9 @@ pub async fn proxy(req: HyperRequest<Body>, format: &str) -> Result<HyperRespons
 			rm("x-reddit-video-features");
 			rm("Nel");
 			rm("Report-To");
+			if is_hls_playlist {
+				headers.insert(wreq_header::CACHE_CONTROL, wreq_header::HeaderValue::from_static("no-store"));
+			}
 
 			res.into_hyper_response()
 		})
