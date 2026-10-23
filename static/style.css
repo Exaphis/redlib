@@ -1487,6 +1487,13 @@ a.search_subreddit:hover {
     overflow: auto;
 }
 
+.comment_body img,
+.comment_body video {
+    max-width: 100%;
+    max-height: 320px;
+    object-fit: contain;
+}
+
 .comment_body.highlighted,
 .comment_body_filtered.highlighted {
     background: var(--highlighted);
