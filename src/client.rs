@@ -367,6 +367,18 @@ fn reddit_api_path(path: &str) -> Cow<'_, str> {
 	}
 }
 
+// Reddit sometimes blocks the literal all-feed route while accepting the
+// equivalent multi-feed route. Limit this workaround to listing endpoints.
+fn all_listing_fallback(path: &str) -> Option<String> {
+	let (pathname, query) = path.split_once('?').map_or((path, ""), |(p, _)| (p, &path[p.len()..]));
+	let rest = pathname.strip_prefix("/r/")?;
+	let (sub, endpoint) = rest.split_once('/')?;
+	if !sub.eq_ignore_ascii_case("all") || !matches!(endpoint, "hot.json" | "new.json" | "top.json" | "rising.json" | "controversial.json" | ".json") {
+		return None;
+	}
+	Some(format!("/r/all%2Ball/{endpoint}{query}"))
+}
+
 /// Make a request to a Reddit API and parse the JSON response
 #[cached(size = 100, time = 30, result = true)]
 pub async fn json(path: String, quarantine: bool) -> Result<Value, String> {
@@ -393,7 +405,14 @@ pub async fn json(path: String, quarantine: bool) -> Result<Value, String> {
 
 	// Fetch the url...
 	match reddit_get(path.clone(), quarantine).await {
-		Ok(response) => {
+		Ok(mut response) => {
+			if response.status().as_u16() == 403 && response.headers().get(wreq_header::CONTENT_TYPE).is_some_and(|v| v.as_bytes().starts_with(b"text/html")) {
+				if let Some(fallback) = all_listing_fallback(&path) {
+					response = reddit_get(fallback, quarantine)
+						.await
+						.map_err(|e| format!("Couldn't send request to Reddit: {e} | {path}"))?;
+				}
+			}
 			let status = response.status();
 			// Preserve JSON errors for private/quarantined subs. Only the HTML
 			// network-security block should trigger scraping.
@@ -575,6 +594,24 @@ mod tests {
 	use {crate::config::get_setting, sealed_test::prelude::*};
 
 	const POPULAR_URL: &str = "/r/popular/hot.json?&raw_json=1&geo_filter=GLOBAL";
+
+	#[test]
+	fn test_all_listing_fallback() {
+		assert_eq!(
+			all_listing_fallback("/r/all/hot.json?&raw_json=1&after=t3_abc&limit=25"),
+			Some("/r/all%2Ball/hot.json?&raw_json=1&after=t3_abc&limit=25".into())
+		);
+		assert_eq!(all_listing_fallback("/r/All/new.json"), Some("/r/all%2Ball/new.json".into()));
+		for path in [
+			"/r/all/about.json",
+			"/r/all/comments/abc.json",
+			"/r/all/wiki/index.json",
+			"/r/all+rust/hot.json",
+			"/r/rust/hot.json?sub=all",
+		] {
+			assert_eq!(all_listing_fallback(path), None);
+		}
+	}
 
 	#[tokio::test(flavor = "multi_thread")]
 	#[ignore = "requires live Reddit access; verifies OAuth API transport against current upstream behavior"]
