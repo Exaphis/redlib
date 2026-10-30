@@ -30,6 +30,15 @@ const ALTERNATIVE_REDDIT_URL_BASE_HOST: &str = "www.reddit.com";
 
 pub static CLIENT: LazyLock<WreqClient> = LazyLock::new(build_client);
 
+// Reddit's OAuth API rejects browser-emulated transports even with valid
+// anonymous tokens. Keep API data requests separate from browser/HTML traffic.
+static API_CLIENT: LazyLock<WreqClient> = LazyLock::new(|| {
+	WreqClient::builder()
+		.redirect(Policy::none())
+		.build()
+		.expect("Should always be able to build an API client")
+});
+
 pub static OAUTH_CLIENT: LazyLock<ArcSwap<Oauth>> = LazyLock::new(|| {
 	let client = block_on(Oauth::new());
 	tokio::spawn(token_daemon());
@@ -274,7 +283,8 @@ fn request(method: &'static Method, path: String, redirect: bool, quarantine: bo
 	// shuffle headers: https://github.com/redlib-org/redlib/issues/324
 	fastrand::shuffle(&mut headers);
 
-	let mut builder = CLIENT.request(method.clone(), &url);
+	let client = if base_path == REDDIT_URL_BASE { &*API_CLIENT } else { &*CLIENT };
+	let mut builder = client.request(method.clone(), &url);
 
 	for (key, value) in headers {
 		builder = builder.header(key, value);
@@ -478,7 +488,9 @@ pub async fn json(path: String, quarantine: bool) -> Result<Value, String> {
 						}
 						Err(e) => {
 							error!("Got an invalid response from reddit {e}. Status code: {status}");
-							if status.is_server_error() {
+							if status.as_u16() == 403 {
+								err("Reddit blocked this request (403 Forbidden)", "The upstream response was not JSON".to_string(), path)
+							} else if status.is_server_error() {
 								Err("Reddit is having issues, check if there's an outage".to_string())
 							} else {
 								err("Failed to parse page JSON data", e.to_string(), path)
@@ -563,6 +575,16 @@ mod tests {
 	use {crate::config::get_setting, sealed_test::prelude::*};
 
 	const POPULAR_URL: &str = "/r/popular/hot.json?&raw_json=1&geo_filter=GLOBAL";
+
+	#[tokio::test(flavor = "multi_thread")]
+	#[ignore = "requires live Reddit access; verifies OAuth API transport against current upstream behavior"]
+	async fn test_api_listings_and_post_metadata() {
+		let listing = json("/r/rust/hot.json?raw_json=1".into(), false).await.unwrap();
+		assert_eq!(listing["kind"], "Listing");
+		let post_name = listing["data"]["children"][0]["data"]["name"].as_str().expect("listing should contain a post");
+		let post = json(format!("/by_id/{post_name}.json?raw_json=1"), false).await.unwrap();
+		assert_eq!(post["data"]["children"][0]["data"]["name"], post_name);
+	}
 
 	#[test]
 	fn test_reddit_api_thread_paths() {

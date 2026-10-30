@@ -65,10 +65,10 @@ pub async fn thread(path: &str, quarantine: bool) -> Result<Value, String> {
 	let comments = if let Some(comment_id) = comment_id {
 		// The comment itself, then its replies through a cursor naming it as the parent
 		let mut html = get(&format!("{SVC_BASE}/comment/t1_{comment_id}?depth=0&subredditName={sub}"), quarantine).await?;
-		html += &more(&sub, &id, &cursor_for(&comment_id), quarantine).await?;
+		html += &more(&sub, &id, &cursor_for(&comment_id), sort, quarantine).await?;
 		html
 	} else if let Some(cursor) = param(path, "cursor") {
-		more(&sub, &id, &cursor, quarantine).await?
+		more(&sub, &id, &cursor, sort, quarantine).await?
 	} else {
 		get(&format!("{SVC_BASE}/comments/r/{sub}/t3_{id}?sort={}", sort.to_uppercase()), quarantine).await?
 	};
@@ -136,8 +136,8 @@ async fn get(url: &str, quarantine: bool) -> Result<String, String> {
 }
 
 /// Loads the comments behind a cursor, like reddit.com's "more replies" buttons.
-async fn more(sub: &str, id: &str, cursor: &str, quarantine: bool) -> Result<String, String> {
-	let url = format!("{SVC_BASE}/more-comments/{sub}/t3_{id}");
+async fn more(sub: &str, id: &str, cursor: &str, sort: &str, quarantine: bool) -> Result<String, String> {
+	let url = format!("{SVC_BASE}/more-comments/{sub}/t3_{id}?sort={}", sort.to_uppercase());
 	// Double-submit CSRF check: any token works as long as cookie and form match
 	let csrf = format!("{:032x}", fastrand::u128(..));
 	let body = serde_urlencoded::to_string([("cursor", cursor), ("csrf_token", &csrf)]).map_err(|e| e.to_string())?;
